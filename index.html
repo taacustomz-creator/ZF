@@ -477,7 +477,7 @@
   </div>
 
   <div class="footer-note">
-    Оргкомитет Республиканского конкурса-фестиваля «ZHIGER FEST: NEW YEAR EDITION» • 2026 • версия формы 4
+    Оргкомитет Республиканского конкурса-фестиваля «ZHIGER FEST: NEW YEAR EDITION» • 2026 • версия формы 5
   </div>
 </div>
 
@@ -533,13 +533,14 @@
     return true;
   }
 
-  // Отправка через скрытую форму + iframe: работает во всех браузерах и WebView
+  // Запасной способ: скрытая форма + iframe (окно не удаляется, пока запрос не завершился)
   function postViaIframe(dataObj) {
     return new Promise(function (resolve) {
       var name = 'hidden_iframe_' + Date.now();
       var iframe = document.createElement('iframe');
       iframe.name = name;
       iframe.style.display = 'none';
+      document.body.appendChild(iframe);
 
       var f = document.createElement('form');
       f.method = 'POST';
@@ -547,7 +548,6 @@
       f.target = name;
       f.acceptCharset = 'UTF-8';
       f.style.display = 'none';
-
       Object.keys(dataObj).forEach(function (k) {
         var inp = document.createElement('input');
         inp.type = 'hidden';
@@ -555,7 +555,9 @@
         inp.value = dataObj[k];
         f.appendChild(inp);
       });
+      document.body.appendChild(f);
 
+      var started = Date.now();
       var done = false;
       function finish() {
         if (done) return;
@@ -563,33 +565,51 @@
         setTimeout(function () {
           if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
           if (f.parentNode) f.parentNode.removeChild(f);
-        }, 500);
+        }, 3000);
         resolve();
       }
-      var loads = 0;
-      iframe.addEventListener('load', function () {
-        loads++;
-        if (loads >= 1) finish();
-      });
-      setTimeout(finish, 8000);
-
-      document.body.appendChild(iframe);
-      document.body.appendChild(f);
+      // Подписываемся только ПОСЛЕ отправки, чтобы не поймать пустую загрузку iframe
       f.submit();
+      iframe.addEventListener('load', function () {
+        var wait = Math.max(0, 2500 - (Date.now() - started));
+        setTimeout(finish, wait);
+      });
+      setTimeout(finish, 15000);
     });
+  }
+
+  // Основной способ: fetch, ждём настоящего ответа от Google
+  async function postViaFetch(payload) {
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 25000) : null;
+    try {
+      await fetch(GOOGLE_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: payload,
+        signal: ctrl ? ctrl.signal : undefined
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async function sendForm() {
     if (!validateForm()) return;
 
     submitBtn.disabled = true;
-    submitBtn.textContent = "Отправка заявки...";
+    submitBtn.textContent = "Отправка заявки... Не закрывайте страницу";
 
     const dataObj = {};
     new FormData(form).forEach((value, key) => { dataObj[key] = value; });
 
     try {
-      await postViaIframe(dataObj);
+      try {
+        await postViaFetch(JSON.stringify(dataObj));
+      } catch (e1) {
+        await postViaIframe(dataObj);
+      }
       form.style.display = 'none';
       successBanner.style.display = 'block';
       window.scrollTo(0, 0);
